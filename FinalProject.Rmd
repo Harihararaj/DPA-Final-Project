@@ -1,10 +1,6 @@
 ---
 title: "DPA CSP 571"
-author: "Team Project"
-date: "`r Sys.Date()`"
-output:
-  pdf_document:
-    latex_engine: xelatex
+author: "Kiran Gopi, Lakshmanan Subramanian, Harihararaj Jayabalan"
 ---
 ```{r}
 # Load necessary libraries
