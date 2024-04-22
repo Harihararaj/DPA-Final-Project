@@ -1,0 +1,470 @@
+---
+title: "DPA CSP 571"
+author: "Team Project"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(ggplot2)
+library(GGally)
+library(readr)
+library(tidyr)
+
+# Data Import
+file_path <- "dataset.csv"
+# Attempt to re-import the data with the correct delimiter
+player_data <- read.csv(file_path, sep = ";", stringsAsFactors = FALSE)
+# Print column names to confirm proper import
+print(names(player_data))
+
+```
+
+
+```{r}
+# Data Cleaning and Preprocessing
+
+# Convert columns to appropriate data types
+player_data <- player_data %>%
+  mutate(
+    Age = as.numeric(Age),
+    Goals = as.numeric(Goals),
+    Assists = as.numeric(Assists),
+    MP = as.numeric(MP),
+    Min = as.numeric(Min),
+    Shots = as.numeric(Shots),
+    SoT = as.numeric(SoT)
+  )
+
+# Handling Missing Values
+# Replace missing values using median for numerical columns and mode for categorical
+numeric_columns <- sapply(player_data, is.numeric)
+categorical_columns <- sapply(player_data, is.character)
+
+player_data[numeric_columns] <- lapply(player_data[numeric_columns], function(x) {
+  x[is.na(x)] <- median(x, na.rm = TRUE)
+  return(x)
+})
+
+# Mode function to use for categorical data
+getmode <- function(v) {
+  uniqv <- unique(v)
+  uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+
+player_data[categorical_columns] <- lapply(player_data[categorical_columns], function(x) {
+  mode_value <- getmode(x)
+  x[is.na(x)] <- mode_value
+  return(x)
+})
+
+# Removing duplicates
+player_data <- distinct(player_data)
+
+# Identify and Cap Outliers in 'Age'
+Q1 <- quantile(player_data$Age, 0.25, na.rm = TRUE)
+Q3 <- quantile(player_data$Age, 0.75, na.rm = TRUE)
+IQR <- Q3 - Q1
+
+player_data$Age <- ifelse(player_data$Age < (Q1 - 1.5 * IQR), Q1 - 1.5 * IQR, player_data$Age)
+player_data$Age <- ifelse(player_data$Age > (Q3 + 1.5 * IQR), Q3 + 1.5 * IQR, player_data$Age)
+
+# Feature Engineering: Creating new variables
+player_data <- player_data %>%
+  mutate(
+    Goals_per_Match = Goals / MP,
+    Minutes_per_Game = Min / MP,
+    Goals_per_Shot = if_else(Shots > 0, Goals / Shots, 0)
+  )
+
+# Normalize data for better scale handling
+player_data[numeric_columns] <- lapply(player_data[numeric_columns], scale)
+
+# Apply Label Encoding to each categorical column
+player_data <- player_data %>%
+  mutate(
+    Pos = as.integer(factor(Pos, levels = unique(Pos))),
+    Nation = as.integer(factor(Nation, levels = unique(Nation))),
+    Comp = as.integer(factor(Comp, levels = unique(Comp))),
+    Squad = as.integer(factor(Squad, levels = unique(Squad)))
+  )
+```
+Step 3: Detailed EDA with Visualizations
+Distribution of Age and Goals
+Show distribution and find if there's a peak performance age.
+```{r}
+ggplot(player_data, aes(x = Age)) +
+  geom_histogram(bins = 30, fill = 'skyblue', color = 'black') +
+  ggtitle("Distribution of Player Age") +
+  xlab("Age") +
+  ylab("Frequency")
+
+ggplot(player_data, aes(x = Goals)) +
+  geom_histogram(bins = 10, fill = 'lightgreen', color = 'black') +
+  ggtitle("Distribution of Goals Scored") +
+  xlab("Goals") +
+  ylab("Frequency")
+```
+
+Goals vs. Assists
+Analyze the relationship between goals and assists.
+
+```{r}
+ggplot(player_data, aes(x = Goals, y = Assists)) +
+  geom_point(aes(color = Pos), alpha = 0.6) +
+  geom_smooth(method = "lm") +
+  labs(title = "Relationship between Goals and Assists", x = "Goals", y = "Assists")
+```
+
+Heatmap of Numeric Features
+Explore correlations visually.
+```{r}
+# Install ggcorrplot if it's not already installed
+if (!require(ggcorrplot, quietly = TRUE)) {
+    install.packages("ggcorrplot", dependencies = TRUE)
+}
+
+# Load the ggcorrplot package
+library(ggcorrplot)
+
+numeric_data <- select(player_data, Age, Goals, Assists, MP, Shots, SoT)
+corr_matrix <- cor(numeric_data, use = "complete.obs")
+ggcorrplot(corr_matrix, method = "circle", type = "full", lab = TRUE)
+```
+Player Performance by League
+Analyze the spread of player performance across different leagues.
+
+```{r}
+# Calculate total goals by league
+league_goals <- player_data %>%
+  group_by(Comp) %>%
+  summarize(Total_Goals = sum(Goals, na.rm = TRUE))
+
+# Plot the total goals per league
+ggplot(league_goals, aes(x = Comp, y = Total_Goals, fill = Comp)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Player Performance by League", x = "League", y = "Total Goals") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) # Rotate x labels for better readability
+
+```
+Box Plot of Age vs. Player Position
+Explore age distribution by position to see if certain positions are dominated by younger or older players.
+
+```{r}
+# Ensure the Age and Pos columns are correctly formatted and contain no NA values
+player_data <- player_data %>%
+  filter(!is.na(Age), !is.na(Pos))
+
+# Plot the box plot for Age distribution by Position
+ggplot(player_data, aes(x = Pos, y = Age)) +
+  geom_boxplot() +
+  labs(title = "Age Distribution by Player Position", x = "Position", y = "Age")
+
+```
+Creating Performance Metrics
+```{r}
+# Creating a Performance Index based on goals, assists, and shots on target
+player_data <- player_data %>%
+  mutate(
+    Performance_Index = (Goals * 2 + Assists * 1.5 + SoT) / MP,  # Weighted sum of goals, assists, and shots on target per match played
+    Attack_Effectiveness = Goals / Shots,  # Goals to shots ratio
+    Play_Making = Assists / MP  # Assists per match
+  )
+
+# Normalize the new performance metrics for better comparison
+performance_metrics <- c("Performance_Index", "Attack_Effectiveness", "Play_Making")
+player_data[performance_metrics] <- scale(player_data[performance_metrics])
+```
+
+Visualizing Performance Metrics
+```{r}
+# Histograms to show distribution of each performance metric
+ggplot(player_data, aes(x = Performance_Index)) +
+  geom_histogram(bins = 30, fill = 'blue', color = 'black') +
+  ggtitle("Distribution of Performance Index") +
+  xlab("Performance Index") +
+  ylab("Frequency")
+
+ggplot(player_data, aes(x = Attack_Effectiveness)) +
+  geom_histogram(bins = 30, fill = 'red', color = 'black') +
+  ggtitle("Distribution of Attack Effectiveness") +
+  xlab("Attack Effectiveness") +
+  ylab("Frequency")
+
+ggplot(player_data, aes(x = Play_Making)) +
+  geom_histogram(bins = 30, fill = 'green', color = 'black') +
+  ggtitle("Distribution of Play Making") +
+  xlab("Play Making") +
+  ylab("Frequency")
+
+```
+
+Comparing Performance Metrics by Player Position
+```{r}
+# Box plots to compare performance metrics by position
+ggplot(player_data, aes(x = Pos, y = Performance_Index)) +
+  geom_boxplot() +
+  labs(title = "Performance Index by Player Position", x = "Position", y = "Performance Index")
+
+ggplot(player_data, aes(x = Pos, y = Attack_Effectiveness)) +
+  geom_boxplot() +
+  labs(title = "Attack Effectiveness by Player Position", x = "Position", y = "Attack Effectiveness")
+
+ggplot(player_data, aes(x = Pos, y = Play_Making)) +
+  geom_boxplot() +
+  labs(title = "Play Making by Player Position", x = "Position", y = "Play Making")
+
+```
+
+Analyzing Correlations Among Performance Metrics
+```{r}
+# Correlation matrix for performance metrics
+performance_data <- select(player_data, Performance_Index, Attack_Effectiveness, Play_Making, Goals, Assists, SoT)
+corr_matrix_performance <- cor(performance_data, use = "complete.obs")
+
+# Using ggcorrplot to visualize correlations among these metrics
+if (!require(ggcorrplot)) {
+    install.packages("ggcorrplot", dependencies = TRUE)
+}
+library(ggcorrplot)
+ggcorrplot(corr_matrix_performance, method = "circle", type = "lower", lab = TRUE)
+
+```
+Random Forest Model
+```{r}
+# Load necessary libraries
+library(caret)
+library(randomForest)
+library(dplyr)
+
+# Assuming 'player_data' is already loaded and preprocessed
+# Normalize data before applying PCA
+player_data_normalized <- scale(player_data[, sapply(player_data, is.numeric)])
+
+# Apply PCA
+pca_result <- prcomp(player_data_normalized, center = TRUE, scale. = TRUE)
+summary(pca_result)
+
+# Analyze the proportion of variance explained by each component
+var_exp <- cumsum(pca_result$sdev^2 / sum(pca_result$sdev^2))
+num_components <- which(var_exp >= 0.95)[1]  # Select components up to 95% of explained variance
+print(paste("Number of components selected:", num_components))
+
+# Display variance explained by selected components
+print(data.frame(Component = 1:num_components, Variance = pca_result$sdev[1:num_components]^2,
+                 CumulativeVariance = var_exp[1:num_components]))
+
+# Create a new data frame with the selected principal components
+player_data_pca <- data.frame(pca_result$x[, 1:num_components], Goals = player_data$Goals)
+
+# Split the data into training and testing sets
+set.seed(123)
+training_index <- createDataPartition(player_data_pca$Goals, p = 0.8, list = TRUE, times = 1)
+train_data <- player_data_pca[training_index[[1]], ]
+test_data <- player_data_pca[-training_index[[1]], ]
+
+# Ensure consistent factor levels in the 'Goals' response variable
+all_levels <- unique(c(as.character(train_data$Goals), as.character(test_data$Goals)))
+train_data$Goals <- factor(train_data$Goals, levels = all_levels)
+test_data$Goals <- factor(test_data$Goals, levels = all_levels)
+
+# Train Random Forest Model
+model_rf_pca <- randomForest(Goals ~ ., data = train_data, ntree = 100)
+
+# Predictions from Random Forest
+predictions_rf_pca <- predict(model_rf_pca, test_data)
+predictions_rf_pca <- factor(predictions_rf_pca, levels = all_levels)
+
+# Create and print confusion matrices to evaluate the models
+conf_mat_rf_pca <- confusionMatrix(as.factor(predictions_rf_pca), as.factor(test_data$Goals))
+print(conf_mat_rf_pca$table)  # Print the confusion matrix table
+print(conf_mat_rf_pca$overall)  # Print model performance statistics
+
+```
+
+SVM Model
+
+```{r}
+# Load necessary libraries
+library(caret)
+library(dplyr)
+library(e1071)  # For SVM
+
+# Assuming 'player_data' is already loaded and preprocessed
+# Normalize data before applying PCA
+player_data_normalized <- scale(player_data[, sapply(player_data, is.numeric)])
+
+# Apply PCA
+pca_result <- prcomp(player_data_normalized, center = TRUE, scale. = TRUE)
+summary(pca_result)
+
+# Select number of principal components to explain 95% of the variance
+var_exp <- cumsum(pca_result$sdev^2 / sum(pca_result$sdev^2))
+num_components <- which(var_exp >= 0.95)[1]
+player_data_pca <- data.frame(pca_result$x[, 1:num_components], Goals = player_data$Goals)
+
+# Split the data into training and testing sets
+set.seed(123)
+training_index <- createDataPartition(player_data_pca$Goals, p = 0.8, list = TRUE, times = 1)
+train_data <- player_data_pca[training_index[[1]], ]
+test_data <- player_data_pca[-training_index[[1]], ]
+
+# Ensure consistent factor levels in the 'Goals' response variable
+all_levels <- unique(c(as.character(train_data$Goals), as.character(test_data$Goals)))
+train_data$Goals <- factor(train_data$Goals, levels = all_levels)
+test_data$Goals <- factor(test_data$Goals, levels = all_levels)
+
+# Train SVM Model
+model_svm_pca <- svm(Goals ~ ., data = train_data, kernel = "radial", gamma = 0.1, cost = 1, probability = TRUE)
+
+# Predictions from SVM
+predictions_svm_pca <- predict(model_svm_pca, test_data)
+predictions_svm_pca <- factor(predictions_svm_pca, levels = all_levels)
+
+# Create and print confusion matrix to evaluate the SVM model
+conf_mat_svm_pca <- confusionMatrix(as.factor(predictions_svm_pca), as.factor(test_data$Goals))
+
+# Print the confusion matrix and model performance statistics for SVM
+print("SVM Confusion Matrix:")
+print(conf_mat_svm_pca$table)
+print(conf_mat_svm_pca$overall)
+
+```
+Decision Tree
+```{r}
+# Load necessary libraries
+library(caret)
+library(dplyr)
+library(rpart)  # For Decision Tree
+
+# Assuming 'player_data' is already loaded and preprocessed
+# Normalize data before applying PCA
+player_data_normalized <- scale(player_data[, sapply(player_data, is.numeric)])
+
+# Apply PCA
+pca_result <- prcomp(player_data_normalized, center = TRUE, scale. = TRUE)
+summary(pca_result)
+
+# Select number of principal components to explain 95% of the variance
+var_exp <- cumsum(pca_result$sdev^2 / sum(pca_result$sdev^2))
+num_components <- which(var_exp >= 0.95)[1]
+player_data_pca <- data.frame(pca_result$x[, 1:num_components], Goals = player_data$Goals)
+
+# Split the data into training and testing sets
+set.seed(123)
+training_index <- createDataPartition(player_data_pca$Goals, p = 0.8, list = TRUE, times = 1)
+train_data <- player_data_pca[training_index[[1]], ]
+test_data <- player_data_pca[-training_index[[1]], ]
+
+# Ensure consistent factor levels in the 'Goals' response variable
+all_levels <- unique(c(as.character(train_data$Goals), as.character(test_data$Goals)))
+train_data$Goals <- factor(train_data$Goals, levels = all_levels)
+test_data$Goals <- factor(test_data$Goals, levels = all_levels)
+
+# Train Decision Tree Model
+model_tree_pca <- rpart(Goals ~ ., data = train_data, method = "class")
+
+# Predictions from Decision Tree
+predictions_tree_pca <- predict(model_tree_pca, test_data, type = "class")
+
+# Create and print confusion matrix to evaluate the Decision Tree model
+conf_mat_tree_pca <- confusionMatrix(predictions_tree_pca, test_data$Goals)
+
+# Print the confusion matrix and model performance statistics for Decision Tree
+print("Decision Tree Confusion Matrix:")
+print(conf_mat_tree_pca$table)
+print(conf_mat_tree_pca$overall)
+
+```
+
+Linear Regression
+```{r}
+# Load necessary libraries
+library(caret)
+library(dplyr)
+
+# Assuming 'player_data' is already loaded and preprocessed
+# Normalize data before applying PCA
+player_data_normalized <- scale(player_data[, sapply(player_data, is.numeric)])
+
+# Apply PCA
+pca_result <- prcomp(player_data_normalized, center = TRUE, scale. = TRUE)
+summary(pca_result)
+
+# Select number of principal components to explain 95% of the variance
+var_exp <- cumsum(pca_result$sdev^2 / sum(pca_result$sdev^2))
+num_components <- which(var_exp >= 0.95)[1]
+player_data_pca <- data.frame(pca_result$x[, 1:num_components], Goals = player_data$Goals)
+
+# Split the data into training and testing sets
+set.seed(123)
+training_index <- createDataPartition(player_data_pca$Goals, p = 0.8, list = TRUE, times = 1)
+train_data <- player_data_pca[training_index[[1]], ]
+test_data <- player_data_pca[-training_index[[1]], ]
+
+# Ensure consistent factor levels in the 'Goals' response variable
+all_levels <- unique(c(as.character(train_data$Goals), as.character(test_data$Goals)))
+train_data$Goals <- factor(train_data$Goals, levels = all_levels)
+test_data$Goals <- factor(test_data$Goals, levels = all_levels)
+
+# Convert Goals to numeric for linear regression
+train_data$Goals <- as.numeric(train_data$Goals)
+test_data$Goals <- as.numeric(test_data$Goals)
+
+# Train Linear Regression Model
+model_lm_pca <- lm(Goals ~ ., data = train_data)
+
+# Predictions from Linear Regression
+predictions_lm_pca <- predict(model_lm_pca, newdata = test_data)
+
+# Evaluate the model (not typical for linear regression, but can compute RMSE for example)
+rmse <- sqrt(mean((test_data$Goals - predictions_lm_pca)^2))
+print(paste("Root Mean Squared Error (RMSE):", rmse))
+
+```
+
+```{r}
+# Analyze model performance
+print("Random Forest Model Performance:")
+print(conf_mat_rf_pca$overall)
+
+print("SVM Model Performance:")
+print(conf_mat_svm_pca$overall)
+
+print("Decision Tree Model Performance:")
+print(conf_mat_tree_pca$overall)
+
+print("Linear Regression Model RMSE:")
+print(rmse)
+```
+
+```{r}
+library(pROC)
+
+# Random Forest ROC Curve
+rf_proba <- predict(model_rf_pca, test_data, type = "prob")
+roc_rf <- roc(test_data$Goals, rf_proba[,2])  # Assuming binary classification and Goals is a factor
+plot(roc_rf, main = "ROC Curve for Random Forest")
+
+# SVM ROC Curve
+svm_proba <- predict(model_svm_pca, test_data, probability = TRUE)
+svm_scores <- attr(svm_proba, "probabilities")[,2]
+roc_svm <- roc(test_data$Goals, svm_scores)
+plot(roc_svm, col = "red", main = "ROC Curve for SVM")
+
+# Decision Tree ROC Curve
+tree_proba <- predict(model_tree_pca, test_data, type = "prob")
+roc_tree <- roc(test_data$Goals, tree_proba[,2])
+plot(roc_tree, col = "blue", main = "ROC Curve for Decision Tree")
+
+# Assume a threshold to convert regression output to binary outcome, e.g., threshold = 0.5
+binary_predictions <- ifelse(predictions_lm_pca > 0.5, 1, 0)
+
+# Calculate probabilities if needed (not typical for regression)
+predicted_probabilities <- plogis(predictions_lm_pca)  # Convert linear scores to probabilities
+roc_lm <- roc(test_data$Goals, predicted_probabilities)
+plot(roc_lm, col = "green", main = "ROC Curve for Linear Regression")
+```
